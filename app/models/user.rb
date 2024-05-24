@@ -1,6 +1,16 @@
 class User < ApplicationRecord
   has_many :microposts, dependent: :destroy
+  has_many :active_relationships,  class_name: 'Relationship',
+                                   foreign_key: 'follower_id',
+                                   dependent: :destroy
+  has_many :passive_relationships, class_name: 'Relationship',
+                                   foreign_key: 'followed_id',
+                                   dependent: :destroy
+  has_many :following, through: :active_relationships,  source: :followed
+  has_many :followers, through: :passive_relationships, source: :follower
+
   attr_accessor :remember_token, :activation_token, :reset_token
+
   before_save :downcase_email
   before_create :create_activation_digest
   validates :name,  presence: true, length: { maximum: 50 }
@@ -12,14 +22,17 @@ class User < ApplicationRecord
   validates :password, presence: true, length: { minimum: 6 }, allow_nil: true
 
   # 渡された文字列のハッシュ値を返す
-  def User.digest(string)
-    cost = ActiveModel::SecurePassword.min_cost ? BCrypt::Engine::MIN_COST :
-                                                  BCrypt::Engine.cost
-    BCrypt::Password.create(string, cost: cost)
+  def self.digest(string)
+    cost = if ActiveModel::SecurePassword.min_cost
+             BCrypt::Engine::MIN_COST
+           else
+             BCrypt::Engine.cost
+           end
+    BCrypt::Password.create(string, cost:)
   end
 
   # ランダムなトークンを返す
-  def User.new_token
+  def self.new_token
     SecureRandom.urlsafe_base64
   end
 
@@ -40,6 +53,7 @@ class User < ApplicationRecord
   def authenticated?(attribute, remember_token)
     digest = send("#{attribute}_digest")
     return false if digest.nil?
+
     BCrypt::Password.new(digest).is_password?(remember_token)
   end
 
@@ -48,7 +62,7 @@ class User < ApplicationRecord
     update_attribute(:remember_digest, nil)
   end
 
-  def activate 
+  def activate
     update_attribute(:activated, true)
     update_attribute(:activated_at, Time.zone.now)
   end
@@ -58,27 +72,39 @@ class User < ApplicationRecord
   end
 
   def create_reset_digest
-    self.reset_token = User.new_token 
+    self.reset_token = User.new_token
     update_attribute(:reset_digest, User.digest(reset_token))
     update_attribute(:reset_sent_at, Time.zone.now)
-  end 
+  end
 
-  def send_password_reset_email 
+  def send_password_reset_email
     UserMailer.password_reset(self).deliver_now
-  end 
+  end
 
   def password_reset_expired?
-    reset_sent_at < 2.hours.ago 
+    reset_sent_at < 2.hours.ago
   end
 
   # 試作feedの定義
   # 完全な実装は次章の「ユーザーをフォローする」を参照
   def feed
-    Micropost.where("user_id = ?", id)
+    Micropost.where('user_id = ?', id)
   end
 
+  def follow(other_user)
+    following << other_user unless self == other_user
+  end
 
-  private 
+  def unfollow(other_user)
+    following.delete(other_user)
+  end
+
+  def following?(other_user)
+    following.include?(other_user)
+  end
+
+  private
+
   def downcase_email
     self.email = email.downcase
   end
